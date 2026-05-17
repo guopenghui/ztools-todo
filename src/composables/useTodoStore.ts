@@ -1,46 +1,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import type { GroupDoc, Settings, StatusFilter, TaskDoc, ViewName } from '../types'
 import { featureFlags } from '../featureFlags'
-
-const TASKS_PREFIX = 'todo-tasks/'
-const GROUPS_PREFIX = 'todo-group/'
-const SETTINGS_KEY = 'todo-settings'
-const ACTIVE_GROUP_KEY = 'todo-active-group'
-const ACTIVE_TASK_KEY = 'todo-active-task'
-const LOCAL_DOCS_KEY = 'todo-dev-docs'
-
-interface TaskSearchResult {
-  task: TaskDoc
-  group: GroupDoc
-  score: number
-}
-
-export const noteColors = [
-  { name: '柔和浅黄', background: '#FFFECF', text: '#000000' },
-  { name: '米白黄', background: '#F5F5DC', text: '#000000' },
-  { name: '浅灰白', background: '#F0F0F0', text: '#000000' },
-  { name: '珍珠白', background: '#FFFAF0', text: '#000000' },
-  { name: '浅薄荷绿', background: '#E8F5E9', text: '#000000' },
-  { name: '浅天蓝', background: '#E0F7FA', text: '#000000' }
-]
-
-const defaultGroups = [
-  { _id: `${GROUPS_PREFIX}pending`, title: '待处理', sort: 1 },
-  { _id: `${GROUPS_PREFIX}doing`, title: '进行中', sort: 2 },
-  { _id: `${GROUPS_PREFIX}unnamed`, title: '未命名', sort: 3 }
-]
-
-const defaultSettings: Settings = {
-  hideCompleted: false,
-  bottomCompleted: false,
-  renderMarkdown: false,
-  noteBlurTransparent: true,
-  noteOpacity: 0.6,
-  noteBackground: '#FFFECF',
-  tomatoSkin: 'tomato',
-  tomatoMinutes: 25,
-  tomatoScale: 1
-}
+import {
+  ACTIVE_GROUP_KEY,
+  ACTIVE_TASK_KEY,
+  GROUPS_PREFIX,
+  SETTINGS_KEY,
+  TASKS_PREFIX,
+  defaultGroups,
+  defaultSettings
+} from './todoConstants'
+import { allDocs, docValue, getStorage, groupPayload, putDoc, removeDoc, setStorage, taskPayload } from './todoPersistence'
+import { compactDate, formatDate, formatDateInput, formatTimer, parseDateInputEndOfDay } from './todoFormatters'
+import { useTaskSearch } from './useTaskSearch'
 
 const route = ref<ViewName>('main')
 const routeQuery = ref(new URLSearchParams())
@@ -60,9 +32,6 @@ const editingGroupId = ref('')
 const editingGroupTitle = ref('')
 const detailTaskId = ref('')
 const settingsOpen = ref(false)
-const taskSearchOpen = ref(false)
-const taskSearchQuery = ref('')
-const taskSearchIndex = ref(0)
 const deleteGroupId = ref('')
 const deleteTaskId = ref('')
 const contextMenu = ref<{ open: boolean; x: number; y: number; kind: 'task' | 'group' | ''; id: string }>({
@@ -88,92 +57,6 @@ const tomatoRemaining = ref(defaultSettings.tomatoMinutes * 60)
 const tomatoRunning = ref(false)
 let mounted = false
 let tomatoInterval: number | undefined
-
-function hasZtools() {
-  return typeof window !== 'undefined' && Boolean((window as any).ztools)
-}
-
-function docValue<T>(doc: any): T {
-  return (doc?.value || doc) as T
-}
-
-function localDocs(): Record<string, any> {
-  try {
-    return JSON.parse(localStorage.getItem(LOCAL_DOCS_KEY) || '{}')
-  } catch {
-    return {}
-  }
-}
-
-function setLocalDocs(docs: Record<string, any>) {
-  localStorage.setItem(LOCAL_DOCS_KEY, JSON.stringify(docs))
-}
-
-function getStorage<T>(key: string, fallback: T): T {
-  if (hasZtools()) return window.ztools.dbStorage.getItem<T>(key) ?? fallback
-  try {
-    const value = localStorage.getItem(key)
-    return value ? (JSON.parse(value) as T) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function setStorage(key: string, value: unknown) {
-  if (hasZtools()) window.ztools.dbStorage.setItem(key, value)
-  else localStorage.setItem(key, JSON.stringify(value))
-}
-
-function allDocs<T>(prefix: string): Array<{ _id: string; value: T }> {
-  if (hasZtools()) return window.ztools.db.allDocs<{ value: T }>(prefix) as Array<{ _id: string; value: T }>
-  return Object.entries(localDocs())
-    .filter(([id]) => id.startsWith(prefix))
-    .map(([id, value]) => ({ _id: id, value: value as T }))
-}
-
-function putDoc<T>(id: string, value: T) {
-  if (hasZtools()) {
-    window.ztools.dbStorage.setItem(id, value)
-    window.ztools.db.put({ _id: id, value })
-    return
-  }
-  const docs = localDocs()
-  docs[id] = value
-  setLocalDocs(docs)
-}
-
-function removeDoc(id: string) {
-  if (hasZtools()) {
-    const doc = window.ztools.db.get(id)
-    if (doc) window.ztools.db.remove(doc)
-    window.ztools.dbStorage.removeItem(id)
-    return
-  }
-  const docs = localDocs()
-  delete docs[id]
-  setLocalDocs(docs)
-}
-
-function taskPayload(task: TaskDoc): Omit<TaskDoc, '_id'> {
-  return {
-    text: task.text,
-    groupId: task.groupId,
-    completed: task.completed,
-    completed_at: task.completed_at,
-    first_completed_at: task.first_completed_at,
-    created_at: task.created_at,
-    sort: task.sort,
-    dueAt: task.dueAt
-  }
-}
-
-function groupPayload(group: GroupDoc): Omit<GroupDoc, '_id'> {
-  return {
-    title: group.title,
-    sort: group.sort,
-    created_at: group.created_at
-  }
-}
 
 function saveTask(task: TaskDoc, shouldRefresh = true) {
   putDoc(task._id, taskPayload(task))
@@ -269,38 +152,6 @@ const noteStatus = computed(() => {
 const noteGroup = computed(() => groups.value.find((group) => group.title === noteGroupName.value) || groups.value[0])
 const noteTasks = computed(() => (noteGroup.value ? tasksForGroup(noteGroup.value._id, noteStatus.value) : []))
 const pendingCount = computed(() => tasks.value.filter((task) => !task.completed).length)
-const taskSearchResults = computed(() => {
-  const query = taskSearchQuery.value.trim().toLowerCase()
-  const tokens = query.split(/\s+/).filter(Boolean)
-
-  return tasks.value
-    .map((task) => {
-      const group = groupById(task.groupId)
-      if (!group) return null
-
-      const taskText = task.text.toLowerCase()
-      const groupTitle = group.title.toLowerCase()
-      const haystack = `${taskText}\n${groupTitle}`
-      if (tokens.length && !tokens.every((token) => haystack.includes(token))) return null
-
-      let score = 0
-      if (!tokens.length) score += 1
-      if (query && taskText === query) score += 240
-      if (query && taskText.startsWith(query)) score += 180
-      if (query && taskText.includes(query)) score += 120
-      if (query && groupTitle.includes(query)) score += 40
-      if (task.completed) score -= 8
-
-      return { task, group, score }
-    })
-    .filter((result): result is TaskSearchResult => Boolean(result))
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score
-      if (a.group.sort !== b.group.sort) return a.group.sort - b.group.sort
-      return a.task.sort - b.task.sort
-    })
-    .slice(0, 12)
-})
 const tomatoProgress = computed(() => {
   const total = settings.tomatoMinutes * 60
   return total ? 1 - tomatoRemaining.value / total : 0
@@ -349,42 +200,23 @@ function closeContextMenu() {
   contextMenu.value.open = false
 }
 
-function openTaskSearch() {
-  closeContextMenu()
-  taskSearchOpen.value = true
-  taskSearchQuery.value = ''
-  taskSearchIndex.value = 0
-  nextTick(() => document.querySelector<HTMLInputElement>('.task-search-input')?.focus())
-}
-
-function closeTaskSearch() {
-  taskSearchOpen.value = false
-  taskSearchQuery.value = ''
-  taskSearchIndex.value = 0
-}
-
-function updateTaskSearchQuery(value: string) {
-  taskSearchQuery.value = value
-  taskSearchIndex.value = 0
-}
-
-function moveTaskSearchSelection(delta: number) {
-  const count = taskSearchResults.value.length
-  if (!count) {
-    taskSearchIndex.value = 0
-    return
-  }
-  taskSearchIndex.value = (taskSearchIndex.value + delta + count) % count
-}
-
-function confirmTaskSearchSelection(result = taskSearchResults.value[taskSearchIndex.value]) {
-  if (!result) return
-  const taskId = result.task._id
-  closeTaskSearch()
-  selectGroup(result.group._id)
-  selectTask(taskId)
-  nextTick(() => document.querySelector<HTMLElement>('.task-card.active')?.scrollIntoView({ block: 'nearest' }))
-}
+const {
+  taskSearchOpen,
+  taskSearchQuery,
+  taskSearchIndex,
+  taskSearchResults,
+  openTaskSearch,
+  closeTaskSearch,
+  updateTaskSearchQuery,
+  moveTaskSearchSelection,
+  confirmTaskSearchSelection
+} = useTaskSearch({
+  tasks,
+  groupById,
+  selectGroup,
+  selectTask,
+  closeContextMenu
+})
 
 function createTask(text: string, groupId = activeGroupId.value, afterTaskId: string | null = activeTaskId.value || null) {
   const content = text.trim()
@@ -656,36 +488,16 @@ function createNoteTask() {
   noteDraft.value = ''
 }
 
-function formatDateInput(timestamp?: number) {
-  if (!timestamp) return ''
-  const date = new Date(timestamp)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 function setDueAt(task: TaskDoc, value: string) {
   const updated = { ...task }
   if (value) {
-    const [year, month, day] = value.split('-').map(Number)
-    if (!year || !month || !day) return
-    updated.dueAt = new Date(year, month - 1, day, 23, 59, 59, 999).getTime()
+    const dueAt = parseDateInputEndOfDay(value)
+    if (!dueAt) return
+    updated.dueAt = dueAt
   } else {
     delete updated.dueAt
   }
   saveTask(updated)
-}
-
-function formatDate(timestamp?: number) {
-  if (!timestamp) return '-'
-  return new Date(timestamp).toLocaleString()
-}
-
-function compactDate(timestamp?: number) {
-  if (!timestamp) return ''
-  const date = new Date(timestamp)
-  return `${date.getMonth() + 1}/${date.getDate()}`
 }
 
 function resetTomato() {
@@ -718,12 +530,6 @@ function updateTomatoMinutes(minutes: number) {
   settings.tomatoMinutes = Math.min(60, Math.max(5, minutes))
   tomatoRemaining.value = settings.tomatoMinutes * 60
   saveSettings()
-}
-
-function formatTimer(seconds: number) {
-  const minute = Math.floor(seconds / 60)
-  const second = seconds % 60
-  return `${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`
 }
 
 function closeCurrentWindow() {
