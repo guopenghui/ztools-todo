@@ -10,11 +10,15 @@ import {
   defaultGroups,
   defaultSettings
 } from './todoConstants'
-import { allDocs, docValue, getStorage, groupPayload, putDoc, removeDoc, setStorage, taskPayload } from './todoPersistence'
+import { allDocs, docValue, getStorage, groupPayload, putDoc, setStorage, taskPayload } from './todoPersistence'
 import { compactDate, formatDate, formatDateInput, formatTimer, parseDateInputEndOfDay } from './todoFormatters'
+import { useTodoContextMenu } from './useTodoContextMenu'
 import { useTodoDrag } from './useTodoDrag'
+import { useTodoGroups } from './useTodoGroups'
 import { useTodoKeyboard } from './useTodoKeyboard'
+import { useTodoTasks } from './useTodoTasks'
 import { useTomatoTimer } from './useTomatoTimer'
+import { useTodoWindows } from './useTodoWindows'
 import { useTaskSearch } from './useTaskSearch'
 
 const route = ref<ViewName>('main')
@@ -24,26 +28,8 @@ const tasks = ref<TaskDoc[]>([])
 const settings = reactive<Settings>({ ...defaultSettings })
 const activeGroupId = ref(`${GROUPS_PREFIX}pending`)
 const activeTaskId = ref('')
-const groupComposerOpen = ref(false)
-const newGroupTitle = ref('')
-const composingTaskGroupId = ref('')
-const composingTaskAfterId = ref<string | null>(null)
-const composingTaskText = ref('')
-const editingTaskId = ref('')
-const editingText = ref('')
-const editingGroupId = ref('')
-const editingGroupTitle = ref('')
 const detailTaskId = ref('')
 const settingsOpen = ref(false)
-const deleteGroupId = ref('')
-const deleteTaskId = ref('')
-const contextMenu = ref<{ open: boolean; x: number; y: number; kind: 'task' | 'group' | ''; id: string }>({
-  open: false,
-  x: 0,
-  y: 0,
-  kind: '',
-  id: ''
-})
 const noteEditingTaskId = ref('')
 const noteDraft = ref('')
 const noteFocused = ref(true)
@@ -133,9 +119,6 @@ function tasksForGroup(groupId: string, status?: StatusFilter) {
 const activeGroup = computed(() => groupById(activeGroupId.value) || groups.value[0])
 const visibleTasks = computed(() => tasksForGroup(activeGroupId.value))
 const detailTask = computed(() => taskById(detailTaskId.value))
-const deletingTask = computed(() => taskById(deleteTaskId.value))
-const contextTask = computed(() => (contextMenu.value.kind === 'task' ? taskById(contextMenu.value.id) : undefined))
-const contextGroup = computed(() => (contextMenu.value.kind === 'group' ? groupById(contextMenu.value.id) : undefined))
 const currentTomatoTask = computed(() => taskById(tomatoTaskId.value))
 const noteGroupName = computed(() => routeQuery.value.get('group') || '待处理')
 const noteStatus = computed(() => {
@@ -178,30 +161,67 @@ function selectTaskAndReveal(id: string) {
   nextTick(() => document.querySelector<HTMLElement>('.task-card.active')?.scrollIntoView({ block: 'nearest' }))
 }
 
-function openTaskContextMenu(event: MouseEvent, task: TaskDoc) {
-  selectTask(task._id)
-  contextMenu.value = {
-    open: true,
-    x: event.clientX,
-    y: event.clientY,
-    kind: 'task',
-    id: task._id
-  }
-}
+const {
+  groupComposerOpen,
+  newGroupTitle,
+  editingGroupId,
+  editingGroupTitle,
+  deleteGroupId,
+  showGroupComposer,
+  createGroup,
+  startGroupEdit,
+  renameGroup,
+  deleteGroup
+} = useTodoGroups({
+  groups,
+  tasks,
+  saveGroup,
+  refreshData,
+  selectGroup
+})
 
-function openGroupContextMenu(event: MouseEvent, group: GroupDoc) {
-  contextMenu.value = {
-    open: true,
-    x: event.clientX,
-    y: event.clientY,
-    kind: 'group',
-    id: group._id
-  }
-}
+const {
+  composingTaskGroupId,
+  composingTaskAfterId,
+  composingTaskText,
+  editingTaskId,
+  editingText,
+  deleteTaskId,
+  deletingTask,
+  createTask,
+  beginCreateTask,
+  saveComposedTask,
+  cancelComposedTask,
+  toggleTask,
+  startEditTask,
+  saveEditTask,
+  requestDeleteTask,
+  confirmDeleteTask,
+  moveTask
+} = useTodoTasks({
+  activeGroupId,
+  activeTaskId,
+  visibleTasks,
+  taskById,
+  allTasksForGroup,
+  saveTask,
+  refreshData,
+  selectGroup,
+  selectTask
+})
 
-function closeContextMenu() {
-  contextMenu.value.open = false
-}
+const {
+  contextMenu,
+  contextTask,
+  contextGroup,
+  openTaskContextMenu,
+  openGroupContextMenu,
+  closeContextMenu
+} = useTodoContextMenu({
+  taskById,
+  groupById,
+  selectTask
+})
 
 const {
   taskSearchOpen,
@@ -220,144 +240,6 @@ const {
   selectTask,
   closeContextMenu
 })
-
-function createTask(text: string, groupId = activeGroupId.value, afterTaskId: string | null = activeTaskId.value || null) {
-  const content = text.trim()
-  if (!content) return
-  const now = Date.now()
-  const task: TaskDoc = {
-    _id: `${TASKS_PREFIX}${now}`,
-    text: content,
-    groupId,
-    completed: false,
-    created_at: now,
-    sort: now
-  }
-
-  const ordered = allTasksForGroup(groupId).filter((item) => item._id !== task._id)
-  const afterIndex = afterTaskId ? ordered.findIndex((item) => item._id === afterTaskId) : -1
-  ordered.splice(afterIndex >= 0 ? afterIndex + 1 : 0, 0, task)
-  ordered.forEach((item, index) => saveTask({ ...item, groupId, sort: index + 1 }, false))
-  refreshData()
-  selectGroup(groupId)
-  selectTask(task._id)
-}
-
-function beginCreateTask(groupId = activeGroupId.value, afterTaskId: string | null = activeTaskId.value || null) {
-  composingTaskGroupId.value = groupId
-  composingTaskAfterId.value = afterTaskId && taskById(afterTaskId)?.groupId === groupId ? afterTaskId : null
-  composingTaskText.value = ''
-  if (activeGroupId.value !== groupId) selectGroup(groupId)
-  nextTick(() => document.querySelector<HTMLTextAreaElement>('.task-create-input')?.focus())
-}
-
-function saveComposedTask(groupId = composingTaskGroupId.value) {
-  if (!composingTaskText.value.trim()) {
-    cancelComposedTask()
-    return
-  }
-  createTask(composingTaskText.value, groupId, composingTaskAfterId.value)
-  cancelComposedTask()
-}
-
-function cancelComposedTask() {
-  composingTaskGroupId.value = ''
-  composingTaskAfterId.value = null
-  composingTaskText.value = ''
-}
-
-function showGroupComposer() {
-  groupComposerOpen.value = true
-  nextTick(() => document.querySelector<HTMLInputElement>('.group-create-input')?.focus())
-}
-
-function createGroup(title = newGroupTitle.value) {
-  const name = title.trim()
-  if (!name) {
-    groupComposerOpen.value = false
-    return
-  }
-  const now = Date.now()
-  const group: GroupDoc = {
-    _id: `${GROUPS_PREFIX}${now}`,
-    title: name,
-    sort: groups.value.reduce((max, item) => Math.max(max, item.sort), 0) + 1,
-    created_at: now
-  }
-  saveGroup(group)
-  newGroupTitle.value = ''
-  groupComposerOpen.value = false
-  selectGroup(group._id)
-}
-
-function startGroupEdit(group: GroupDoc) {
-  editingGroupId.value = group._id
-  editingGroupTitle.value = group.title
-}
-
-function renameGroup(group: GroupDoc) {
-  const title = editingGroupTitle.value.trim()
-  if (!title) return
-  saveGroup({ ...group, title })
-  editingGroupId.value = ''
-}
-
-function deleteGroup(group: GroupDoc) {
-  tasks.value.filter((task) => task.groupId === group._id).forEach((task) => removeDoc(task._id))
-  removeDoc(group._id)
-  deleteGroupId.value = ''
-  refreshData()
-  selectGroup(groups.value[0]?._id || `${GROUPS_PREFIX}pending`)
-}
-
-function toggleTask(task: TaskDoc) {
-  const now = Date.now()
-  const updated = { ...task, completed: !task.completed }
-  if (updated.completed) {
-    updated.completed_at = now
-    if (!updated.first_completed_at) updated.first_completed_at = now
-  } else {
-    delete updated.completed_at
-  }
-  saveTask(updated)
-}
-
-function startEditTask(task: TaskDoc) {
-  editingTaskId.value = task._id
-  editingText.value = task.text
-  nextTick(() => document.querySelector<HTMLTextAreaElement>('.task-edit-input')?.focus())
-}
-
-function saveEditTask(task: TaskDoc) {
-  const text = editingText.value.trim()
-  if (!text) return
-  saveTask({ ...task, text })
-  editingTaskId.value = ''
-}
-
-function requestDeleteTask(task: TaskDoc) {
-  deleteTaskId.value = task._id
-}
-
-function confirmDeleteTask() {
-  const task = deletingTask.value
-  if (!task) {
-    deleteTaskId.value = ''
-    return
-  }
-  removeDoc(task._id)
-  deleteTaskId.value = ''
-  refreshData()
-  if (activeTaskId.value === task._id) activeTaskId.value = visibleTasks.value[0]?._id || ''
-}
-
-function moveTask(task: TaskDoc, position: 'top' | 'bottom') {
-  const sorted = allTasksForGroup(task.groupId).filter((item) => item._id !== task._id)
-  if (position === 'top') sorted.unshift(task)
-  else sorted.push(task)
-  sorted.forEach((item, index) => saveTask({ ...item, sort: index + 1 }, false))
-  refreshData()
-}
 
 const {
   dragTaskId,
@@ -392,22 +274,14 @@ const {
   selectTask
 })
 
-function openNote(group = activeGroup.value) {
-  if (!featureFlags.noteWindow) return
-  if (!group) return
-  window.services?.openNote({ group: group.title })
-}
-
-function openTomato(task = taskById(activeTaskId.value)) {
-  if (!featureFlags.tomatoWindow) return
-  window.services?.openTomato(task?._id)
-}
-
-function createNoteTask() {
-  if (!noteGroup.value) return
-  createTask(noteDraft.value, noteGroup.value._id, null)
-  noteDraft.value = ''
-}
+const { openNote, openTomato, createNoteTask, closeCurrentWindow } = useTodoWindows({
+  activeGroup,
+  activeTaskId,
+  noteGroup,
+  noteDraft,
+  taskById,
+  createTask
+})
 
 function setDueAt(task: TaskDoc, value: string) {
   const updated = { ...task }
@@ -419,10 +293,6 @@ function setDueAt(task: TaskDoc, value: string) {
     delete updated.dueAt
   }
   saveTask(updated)
-}
-
-function closeCurrentWindow() {
-  window.services?.closeWindow?.()
 }
 
 function parseRoute() {
