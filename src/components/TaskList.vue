@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { proxyRefs } from 'vue'
+import { nextTick, proxyRefs, watch } from 'vue'
 import circlePlusIcon from '../assets/icons/circle-plus.svg'
 import type { TaskDoc } from '../types'
 import { useTodoStore } from '../composables/useTodoStore'
@@ -8,6 +8,15 @@ import { renderMarkdown } from '../utils/markdown'
 import SvgIcon from './SvgIcon.vue'
 
 const store = proxyRefs(useTodoStore())
+
+function resizeAllTextareas() {
+  nextTick(() => {
+    document.querySelectorAll<HTMLTextAreaElement>('.task-edit-input, .task-create-input').forEach((textarea) => {
+      textarea.style.height = 'auto'
+      textarea.style.height = `${textarea.scrollHeight}px`
+    })
+  })
+}
 
 function showComposerBeforeList() {
   return store.composingTaskGroupId === store.activeGroupId && store.composingTaskAfterId === null
@@ -34,6 +43,12 @@ function resizeTextarea(event: Event) {
   textarea.style.height = 'auto'
   textarea.style.height = `${textarea.scrollHeight}px`
 }
+
+watch(
+  () => [store.editingTaskId, store.composingTaskGroupId, store.composingTaskAfterId, store.editingText, store.composingTaskText],
+  resizeAllTextareas,
+  { flush: 'post' }
+)
 
 </script>
 
@@ -133,17 +148,20 @@ function resizeTextarea(event: Event) {
 
 <style scoped>
 .task-panel {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 7px;
-  height: calc(100% - 56px);
+  flex: 1;
+  min-height: 0;
   max-width: 920px;
+  width: 100%;
   padding: 18px;
   overflow: auto;
 }
 
 .task-card {
   position: relative;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -154,6 +172,14 @@ function resizeTextarea(event: Event) {
   border-radius: 7px;
   background: var(--surface);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.task-card > input[type="checkbox"] {
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 .task-card.editing,
@@ -201,17 +227,22 @@ function resizeTextarea(event: Event) {
 
 .task-text {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
+  line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .markdown-rendered {
+  min-width: 0;
   white-space: normal;
 }
 
 .markdown-rendered :deep(*) {
   max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .markdown-rendered :deep(p),

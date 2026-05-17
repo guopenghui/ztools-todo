@@ -58,8 +58,11 @@ function confirmDeleteGroup() {
 }
 
 .workspace {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background:
     radial-gradient(circle at top right, rgba(89, 118, 245, 0.08), transparent 34%),
     var(--bg);
