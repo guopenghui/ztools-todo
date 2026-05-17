@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@ztools-center/ztools-api-types/resource/ztools.schema.json",
-  "name": "todo0",
-  "title": "Todo待办",
-  "pluginName": "ToDo 待办",
-  "description": "随时记录你的大小事务",
+  "name": "todo-neo",
+  "title": "Todo",
+  "pluginName": "Todo",
+  "description": "Vim-like 的 todo 工具",
   "author": "thetree",
   "version": "0.0.1",
   "ai": true,
-  "main": "index.html",
+  "main": "../index.html",
   "preload": "preload/services.js",
   "logo": "logo.png",
   "development": {
