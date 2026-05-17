@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import circlePlusIcon from '../assets/icons/circle-plus.svg'
 import plusIcon from '../assets/icons/plus.svg'
 import timerIcon from '../assets/icons/timer.svg'
@@ -35,10 +35,10 @@ function stopEscape(event: KeyboardEvent, callback: () => void) {
           @click="store.settings.noteBackground = color.background; store.saveSettings()"
         ></button>
       </div>
-      <button title="鏂板浠诲姟" @click="store.noteEditingTaskId.value = 'new'">
+      <button title="新增任务" @click="store.noteEditingTaskId.value = 'new'">
         <SvgIcon :src="plusIcon" />
       </button>
-      <button title="鍏抽棴" @click="store.closeCurrentWindow">
+      <button title="关闭" @click="store.closeCurrentWindow">
         <SvgIcon :src="xIcon" />
       </button>
     </header>
@@ -64,7 +64,7 @@ function stopEscape(event: KeyboardEvent, callback: () => void) {
       </article>
       <button v-if="!store.noteTasks.value.length" class="note-empty" @click="store.noteEditingTaskId.value = 'new'">
         <SvgIcon :src="circlePlusIcon" :size="20" />
-        鏆傛棤浠诲姟 鐐瑰嚮鏂板缓
+        暂无任务 点击新建
       </button>
     </section>
   </main>

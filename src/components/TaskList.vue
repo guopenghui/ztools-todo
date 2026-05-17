@@ -1,35 +1,20 @@
 <script setup lang="ts">
-import MarkdownIt from 'markdown-it'
+import { proxyRefs } from 'vue'
 import circlePlusIcon from '../assets/icons/circle-plus.svg'
 import type { TaskDoc } from '../types'
 import { useTodoStore } from '../composables/useTodoStore'
 import { plainTextInputAttrs } from '../utils/inputAttrs'
+import { renderMarkdown } from '../utils/markdown'
 import SvgIcon from './SvgIcon.vue'
 
-const store = useTodoStore()
-const markdown = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true
-})
-
-const defaultLinkOpen = markdown.renderer.rules.link_open
-markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
-  tokens[index].attrSet('target', '_blank')
-  tokens[index].attrSet('rel', 'noreferrer')
-  return defaultLinkOpen ? defaultLinkOpen(tokens, index, options, env, self) : self.renderToken(tokens, index, options)
-}
-
-function renderTaskText(text: string) {
-  return markdown.render(text)
-}
+const store = proxyRefs(useTodoStore())
 
 function showComposerBeforeList() {
-  return store.composingTaskGroupId.value === store.activeGroupId.value && store.composingTaskAfterId.value === null
+  return store.composingTaskGroupId === store.activeGroupId && store.composingTaskAfterId === null
 }
 
 function showComposerAfter(task: TaskDoc) {
-  return store.composingTaskGroupId.value === store.activeGroupId.value && store.composingTaskAfterId.value === task._id
+  return store.composingTaskGroupId === store.activeGroupId && store.composingTaskAfterId === task._id
 }
 
 function saveOnPlainEnter(event: KeyboardEvent, callback: () => void) {
@@ -57,33 +42,33 @@ function resizeTextarea(event: Event) {
     <form
       v-if="showComposerBeforeList()"
       class="task-card task-create-card"
-      @submit.prevent="store.saveComposedTask(store.activeGroupId.value)"
+      @submit.prevent="store.saveComposedTask(store.activeGroupId)"
     >
       <textarea
         v-bind="plainTextInputAttrs"
-        v-model="store.composingTaskText.value"
+        v-model="store.composingTaskText"
         class="task-create-input"
         placeholder="输入任务内容"
         rows="1"
-        @keydown="saveOnPlainEnter($event, () => store.saveComposedTask(store.activeGroupId.value))"
+        @keydown="saveOnPlainEnter($event, () => store.saveComposedTask(store.activeGroupId))"
         @keydown.esc="stopEscape($event, store.cancelComposedTask)"
         @focus="resizeTextarea"
         @input="resizeTextarea"
-        @blur="store.saveComposedTask(store.activeGroupId.value)"
+        @blur="store.saveComposedTask(store.activeGroupId)"
       ></textarea>
     </form>
 
-    <template v-for="task in store.visibleTasks.value" :key="task._id">
+    <template v-for="task in store.visibleTasks" :key="task._id">
       <article
         class="task-card"
         :class="{
-          active: task._id === store.activeTaskId.value,
+          active: task._id === store.activeTaskId,
           done: task.completed,
-          editing: store.editingTaskId.value === task._id,
-          'drop-before': store.dragOverTaskId.value === task._id && store.dragInsertPosition.value === 'before',
-          'drop-after': store.dragOverTaskId.value === task._id && store.dragInsertPosition.value === 'after'
+          editing: store.editingTaskId === task._id,
+          'drop-before': store.dragOverTaskId === task._id && store.dragInsertPosition === 'before',
+          'drop-after': store.dragOverTaskId === task._id && store.dragInsertPosition === 'after'
         }"
-        :draggable="store.editingTaskId.value !== task._id"
+        :draggable="store.editingTaskId !== task._id"
         @click="store.selectTask(task._id)"
         @dblclick="store.startEditTask(task)"
         @dragstart="store.startTaskDrag(task)"
@@ -93,15 +78,15 @@ function resizeTextarea(event: Event) {
         @drop.stop="store.onTaskDragDrop(task)"
         @contextmenu.prevent="store.openTaskContextMenu($event, task)"
       >
-        <input v-if="store.editingTaskId.value !== task._id" type="checkbox" :checked="task.completed" @change="store.toggleTask(task)" />
+        <input v-if="store.editingTaskId !== task._id" type="checkbox" :checked="task.completed" @change="store.toggleTask(task)" />
         <textarea
           v-bind="plainTextInputAttrs"
-          v-if="store.editingTaskId.value === task._id"
-          v-model="store.editingText.value"
+          v-if="store.editingTaskId === task._id"
+          v-model="store.editingText"
           class="task-edit-input"
           rows="1"
           @keydown="saveOnPlainEnter($event, () => store.saveEditTask(task))"
-          @keydown.esc="stopEscape($event, () => store.editingTaskId.value = '')"
+          @keydown.esc="stopEscape($event, () => store.editingTaskId = '')"
           @click.stop
           @mousedown.stop
           @dragstart.stop
@@ -109,37 +94,37 @@ function resizeTextarea(event: Event) {
           @input="resizeTextarea"
           @blur="store.saveEditTask(task)"
         ></textarea>
-        <div v-else-if="store.settings.renderMarkdown" class="task-text markdown-rendered" v-html="renderTaskText(task.text)"></div>
+        <div v-else-if="store.settings.renderMarkdown" class="task-text markdown-rendered" v-html="renderMarkdown(task.text)"></div>
         <span v-else class="task-text">{{ task.text }}</span>
-        <time v-if="task.dueAt && store.editingTaskId.value !== task._id" class="due-chip">{{ store.compactDate(task.dueAt) }}</time>
+        <time v-if="task.dueAt && store.editingTaskId !== task._id" class="due-chip">{{ store.compactDate(task.dueAt) }}</time>
       </article>
 
       <form
         v-if="showComposerAfter(task)"
       class="task-card task-create-card"
-      @submit.prevent="store.saveComposedTask(store.activeGroupId.value)"
+      @submit.prevent="store.saveComposedTask(store.activeGroupId)"
     >
         <textarea
           v-bind="plainTextInputAttrs"
-          v-model="store.composingTaskText.value"
+          v-model="store.composingTaskText"
           class="task-create-input"
           placeholder="输入任务内容"
           rows="1"
-          @keydown="saveOnPlainEnter($event, () => store.saveComposedTask(store.activeGroupId.value))"
+          @keydown="saveOnPlainEnter($event, () => store.saveComposedTask(store.activeGroupId))"
           @keydown.esc="stopEscape($event, store.cancelComposedTask)"
           @focus="resizeTextarea"
           @input="resizeTextarea"
-          @blur="store.saveComposedTask(store.activeGroupId.value)"
+          @blur="store.saveComposedTask(store.activeGroupId)"
         ></textarea>
       </form>
     </template>
 
     <button
-      v-if="!store.visibleTasks.value.length && !showComposerBeforeList()"
+      v-if="!store.visibleTasks.length && !showComposerBeforeList()"
       class="empty-state"
       title="新建任务"
       aria-label="新建任务"
-      @click="store.beginCreateTask(store.activeGroupId.value, null)"
+      @click="store.beginCreateTask(store.activeGroupId, null)"
     >
       <SvgIcon :src="circlePlusIcon" :size="20" />
     </button>

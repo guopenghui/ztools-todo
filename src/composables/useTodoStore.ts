@@ -35,6 +35,7 @@ const noteDraft = ref('')
 const noteFocused = ref(true)
 const tomatoTaskId = ref('')
 let mounted = false
+let mountConsumers = 0
 let tomatoInterval: number | undefined
 
 function saveTask(task: TaskDoc, shouldRefresh = true) {
@@ -360,13 +361,24 @@ function unmountStore() {
   window.removeEventListener('hashchange', parseRoute)
   window.removeEventListener('keydown', handleSettingsEscape, { capture: true })
   window.removeEventListener('keydown', handleKeyboard)
-  if (tomatoInterval) window.clearInterval(tomatoInterval)
+  if (tomatoInterval) {
+    window.clearInterval(tomatoInterval)
+    tomatoInterval = undefined
+  }
   mounted = false
 }
 
 export function useTodoStore() {
-  onMounted(mountStore)
-  onBeforeUnmount(unmountStore)
+  onMounted(() => {
+    mountConsumers += 1
+    mountStore()
+  })
+  onBeforeUnmount(() => {
+    mountConsumers = Math.max(0, mountConsumers - 1)
+    if (mountConsumers === 0) {
+      unmountStore()
+    }
+  })
 
   return {
     route,
