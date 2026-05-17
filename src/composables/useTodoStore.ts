@@ -12,6 +12,9 @@ import {
 } from './todoConstants'
 import { allDocs, docValue, getStorage, groupPayload, putDoc, removeDoc, setStorage, taskPayload } from './todoPersistence'
 import { compactDate, formatDate, formatDateInput, formatTimer, parseDateInputEndOfDay } from './todoFormatters'
+import { useTodoDrag } from './useTodoDrag'
+import { useTodoKeyboard } from './useTodoKeyboard'
+import { useTomatoTimer } from './useTomatoTimer'
 import { useTaskSearch } from './useTaskSearch'
 
 const route = ref<ViewName>('main')
@@ -41,20 +44,10 @@ const contextMenu = ref<{ open: boolean; x: number; y: number; kind: 'task' | 'g
   kind: '',
   id: ''
 })
-const dragTaskId = ref('')
-const dragOverTaskId = ref('')
-const dragOverTaskGroupId = ref('')
-const dragInsertPosition = ref<'before' | 'after' | ''>('')
-const dragGroupId = ref('')
-const dragOverGroupId = ref('')
-const groupInsertPosition = ref<'before' | 'after' | ''>('')
-const keyBuffer = ref('')
 const noteEditingTaskId = ref('')
 const noteDraft = ref('')
 const noteFocused = ref(true)
 const tomatoTaskId = ref('')
-const tomatoRemaining = ref(defaultSettings.tomatoMinutes * 60)
-const tomatoRunning = ref(false)
 let mounted = false
 let tomatoInterval: number | undefined
 
@@ -109,7 +102,7 @@ function loadSettings() {
     }
   })
   Object.assign(settings, defaultSettings, savedSettings)
-  tomatoRemaining.value = settings.tomatoMinutes * 60
+  syncTomatoSettings()
 }
 
 function groupById(id: string) {
@@ -152,11 +145,21 @@ const noteStatus = computed(() => {
 const noteGroup = computed(() => groups.value.find((group) => group.title === noteGroupName.value) || groups.value[0])
 const noteTasks = computed(() => (noteGroup.value ? tasksForGroup(noteGroup.value._id, noteStatus.value) : []))
 const pendingCount = computed(() => tasks.value.filter((task) => !task.completed).length)
-const tomatoProgress = computed(() => {
-  const total = settings.tomatoMinutes * 60
-  return total ? 1 - tomatoRemaining.value / total : 0
+const {
+  tomatoRemaining,
+  tomatoRunning,
+  tomatoProgress,
+  tomatoSegments,
+  syncTomatoSettings,
+  resetTomato,
+  toggleTomato,
+  updateTomatoMinutes,
+  tickTomato
+} = useTomatoTimer({
+  settings,
+  currentTomatoTask,
+  saveSettings
 })
-const tomatoSegments = computed(() => Array.from({ length: 25 }, (_, index) => index < Math.ceil(tomatoProgress.value * 25)))
 
 function selectGroup(id: string) {
   activeGroupId.value = id
@@ -356,120 +359,38 @@ function moveTask(task: TaskDoc, position: 'top' | 'bottom') {
   refreshData()
 }
 
-function startGroupDrag(group: GroupDoc) {
-  if (editingGroupId.value === group._id) {
-    clearGroupDropTarget()
-    return
-  }
-  dragGroupId.value = group._id
-}
-
-function updateGroupDropTarget(event: DragEvent, group: GroupDoc) {
-  if (dragTaskId.value) {
-    const task = taskById(dragTaskId.value)
-    if (!task || task.groupId === group._id) {
-      clearGroupDropTarget()
-      return
-    }
-    event.dataTransfer!.dropEffect = 'move'
-    clearGroupDropTarget()
-    clearTaskDropTarget()
-    dragOverTaskGroupId.value = group._id
-    return
-  }
-  if (!dragGroupId.value || dragGroupId.value === group._id) return
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  dragOverGroupId.value = group._id
-  groupInsertPosition.value = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-}
-
-function clearGroupDropTarget() {
-  dragOverGroupId.value = ''
-  groupInsertPosition.value = ''
-  dragOverTaskGroupId.value = ''
-}
-
-function onGroupDragDrop(target: GroupDoc, position = groupInsertPosition.value) {
-  if (dragTaskId.value) {
-    onTaskGroupDrop(target)
-    return
-  }
-  const sourceId = dragGroupId.value
-  dragGroupId.value = ''
-  const resolvedPosition = position || 'before'
-  clearGroupDropTarget()
-  if (!sourceId || sourceId === target._id) return
-  const ordered = [...groups.value]
-  const sourceIndex = ordered.findIndex((group) => group._id === sourceId)
-  if (sourceIndex < 0) return
-  const [source] = ordered.splice(sourceIndex, 1)
-  const targetIndex = ordered.findIndex((group) => group._id === target._id)
-  if (targetIndex < 0) return
-  const insertIndex = resolvedPosition === 'after' ? targetIndex + 1 : targetIndex
-  ordered.splice(insertIndex, 0, source)
-  ordered.forEach((group, index) => saveGroup({ ...group, sort: index + 1 }, false))
-  refreshData()
-}
-
-function startTaskDrag(task: TaskDoc) {
-  if (editingTaskId.value === task._id) {
-    clearTaskDropTarget()
-    return
-  }
-  dragTaskId.value = task._id
-}
-
-function updateTaskDropTarget(event: DragEvent, task: TaskDoc) {
-  if (!dragTaskId.value || dragTaskId.value === task._id) return
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  dragOverTaskGroupId.value = ''
-  dragOverTaskId.value = task._id
-  dragInsertPosition.value = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-}
-
-function clearTaskDropTarget() {
-  dragOverTaskId.value = ''
-  dragOverTaskGroupId.value = ''
-  dragInsertPosition.value = ''
-}
-
-function finishTaskDrag() {
-  dragTaskId.value = ''
-  clearTaskDropTarget()
-}
-
-function onTaskDragDrop(targetTask?: TaskDoc, position = dragInsertPosition.value) {
-  const sourceId = dragTaskId.value
-  dragTaskId.value = ''
-  const resolvedPosition = position || 'before'
-  clearTaskDropTarget()
-  const source = taskById(sourceId)
-  if (!source) return
-  const ordered = allTasksForGroup(activeGroupId.value).filter((task) => task._id !== source._id)
-  const targetIndex = targetTask ? ordered.findIndex((task) => task._id === targetTask._id) : ordered.length
-  const insertIndex = targetTask && targetIndex >= 0 && resolvedPosition === 'after' ? targetIndex + 1 : targetIndex
-  ordered.splice(insertIndex < 0 ? ordered.length : insertIndex, 0, { ...source, groupId: activeGroupId.value })
-  ordered.forEach((task, index) => saveTask({ ...task, sort: index + 1, groupId: activeGroupId.value }, false))
-  refreshData()
-  selectTask(sourceId)
-}
-
-function onTaskGroupDrop(targetGroup: GroupDoc) {
-  const sourceId = dragTaskId.value
-  dragTaskId.value = ''
-  clearTaskDropTarget()
-  clearGroupDropTarget()
-  const source = taskById(sourceId)
-  if (!source || source.groupId === targetGroup._id) return
-
-  const ordered = tasks.value
-    .filter((task) => task.groupId === targetGroup._id && task._id !== source._id)
-    .sort((a, b) => a.sort - b.sort)
-  ordered.push({ ...source, groupId: targetGroup._id })
-  ordered.forEach((task, index) => saveTask({ ...task, groupId: targetGroup._id, sort: index + 1 }, false))
-  refreshData()
-  if (activeTaskId.value === sourceId) activeTaskId.value = visibleTasks.value[0]?._id || ''
-}
+const {
+  dragTaskId,
+  dragOverTaskId,
+  dragOverTaskGroupId,
+  dragInsertPosition,
+  dragGroupId,
+  dragOverGroupId,
+  groupInsertPosition,
+  startGroupDrag,
+  updateGroupDropTarget,
+  clearGroupDropTarget,
+  startTaskDrag,
+  updateTaskDropTarget,
+  clearTaskDropTarget,
+  finishTaskDrag,
+  onGroupDragDrop,
+  onTaskDragDrop
+} = useTodoDrag({
+  groups,
+  tasks,
+  activeGroupId,
+  activeTaskId,
+  editingGroupId,
+  editingTaskId,
+  visibleTasks,
+  taskById,
+  allTasksForGroup,
+  saveTask,
+  saveGroup,
+  refreshData,
+  selectTask
+})
 
 function openNote(group = activeGroup.value) {
   if (!featureFlags.noteWindow) return
@@ -498,38 +419,6 @@ function setDueAt(task: TaskDoc, value: string) {
     delete updated.dueAt
   }
   saveTask(updated)
-}
-
-function resetTomato() {
-  tomatoRunning.value = false
-  tomatoRemaining.value = settings.tomatoMinutes * 60
-}
-
-function toggleTomato() {
-  tomatoRunning.value = !tomatoRunning.value
-}
-
-function completeTomato() {
-  tomatoRunning.value = false
-  tomatoRemaining.value = 0
-  window.ztools?.showNotification?.('番茄钟已完成')
-  if (currentTomatoTask.value) {
-    const history = getStorage<any[]>('todo-tomato-history', [])
-    history.push({
-      taskId: currentTomatoTask.value._id,
-      text: currentTomatoTask.value.text,
-      minutes: settings.tomatoMinutes,
-      completed_at: Date.now()
-    })
-    setStorage('todo-tomato-history', history)
-  }
-}
-
-function updateTomatoMinutes(minutes: number) {
-  if (tomatoRunning.value) return
-  settings.tomatoMinutes = Math.min(60, Math.max(5, minutes))
-  tomatoRemaining.value = settings.tomatoMinutes * 60
-  saveSettings()
 }
 
 function closeCurrentWindow() {
@@ -562,110 +451,22 @@ function handlePluginEnter(action: { code: string; type: string; payload: any })
   refreshData()
 }
 
-function handleKeyboard(event: KeyboardEvent) {
-  const target = event.target as HTMLElement
-  if (route.value !== 'main') return
-
-  if (settingsOpen.value) {
-    if (event.key === 'j' || event.key === 'k') {
-      event.preventDefault()
-      const content = document.querySelector<HTMLElement>('.settings-content')
-      content?.scrollBy({ top: event.key === 'j' ? 72 : -72, behavior: 'smooth' })
-      return
-    }
-  }
-
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
-
-  const taskList = visibleTasks.value
-  const taskIndex = taskList.findIndex((task) => task._id === activeTaskId.value)
-  const groupIndex = groups.value.findIndex((group) => group._id === activeGroupId.value)
-  const activeTask = taskById(activeTaskId.value)
-
-  if (event.key === '?') {
-    event.preventDefault()
-    settingsOpen.value = true
-    return
-  }
-
-  if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey) {
-    event.preventDefault()
-    openTaskSearch()
-    return
-  }
-
-  if (event.ctrlKey && event.key.toLowerCase() === 'n') {
-    event.preventDefault()
-    beginCreateTask(activeGroupId.value, activeTaskId.value || null)
-    return
-  }
-  if (event.key === 'Tab') {
-    event.preventDefault()
-    beginCreateTask(activeGroupId.value, activeTaskId.value || null)
-    return
-  }
-  if (event.key === 'j' || event.key === 'ArrowDown') {
-    event.preventDefault()
-    const nextIndex = taskIndex >= 0 ? (taskIndex + 1) % taskList.length : 0
-    const next = taskList[nextIndex]
-    if (next) selectTaskAndReveal(next._id)
-  } else if (event.key === 'k' || event.key === 'ArrowUp') {
-    event.preventDefault()
-    const prevIndex = taskIndex >= 0 ? (taskIndex - 1 + taskList.length) % taskList.length : taskList.length - 1
-    const prev = taskList[prevIndex]
-    if (prev) selectTaskAndReveal(prev._id)
-  } else if (event.key === 'h' || event.key === 'ArrowLeft') {
-    event.preventDefault()
-    const groupCount = groups.value.length
-    const prevIndex = groupIndex >= 0 ? (groupIndex - 1 + groupCount) % groupCount : groupCount - 1
-    const group = groups.value[prevIndex]
-    if (group) selectGroup(group._id)
-  } else if (event.key === 'l' || event.key === 'ArrowRight') {
-    event.preventDefault()
-    const groupCount = groups.value.length
-    const nextIndex = groupIndex >= 0 ? (groupIndex + 1) % groupCount : 0
-    const group = groups.value[nextIndex]
-    if (group) selectGroup(group._id)
-  } else if ((event.key === ' ' || event.key === 'Spacebar') && activeTask) {
-    event.preventDefault()
-    toggleTask(activeTask)
-  } else if ((event.key === 'Enter' || event.key === 'i') && activeTask) {
-    event.preventDefault()
-    startEditTask(activeTask)
-  } else if ((event.key === 'Backspace' || event.key === 'Delete') && activeTask) {
-    event.preventDefault()
-    requestDeleteTask(activeTask)
-  } else if (event.key === 'G') {
-    event.preventDefault()
-    const lastTask = taskList[taskList.length - 1]
-    if (lastTask) selectTaskAndReveal(lastTask._id)
-  } else if (event.key === 'g') {
-    keyBuffer.value += 'g'
-    if (keyBuffer.value.endsWith('gg')) {
-      event.preventDefault()
-      const firstTask = taskList[0]
-      if (firstTask) selectTaskAndReveal(firstTask._id)
-      keyBuffer.value = ''
-    }
-  } else if (event.key === 'd') {
-    keyBuffer.value += 'd'
-    if (keyBuffer.value.endsWith('dd') && activeTask) {
-      event.preventDefault()
-      requestDeleteTask(activeTask)
-      keyBuffer.value = ''
-    }
-  } else {
-    keyBuffer.value = ''
-  }
-}
-
-function handleSettingsEscape(event: KeyboardEvent) {
-  if (route.value !== 'main' || !settingsOpen.value || event.key !== 'Escape') return
-  event.preventDefault()
-  event.stopPropagation()
-  event.stopImmediatePropagation()
-  settingsOpen.value = false
-}
+const { handleKeyboard, handleSettingsEscape } = useTodoKeyboard({
+  route,
+  settingsOpen,
+  groups,
+  activeGroupId,
+  activeTaskId,
+  visibleTasks,
+  taskById,
+  selectTaskAndReveal,
+  selectGroup,
+  toggleTask,
+  startEditTask,
+  requestDeleteTask,
+  beginCreateTask,
+  openTaskSearch
+})
 
 function mountStore() {
   if (mounted) return
@@ -681,9 +482,7 @@ function mountStore() {
   window.ztools?.onPluginEnter?.(handlePluginEnter)
   window.ztools?.onDbPull?.(() => refreshData())
   tomatoInterval = window.setInterval(() => {
-    if (!tomatoRunning.value) return
-    if (tomatoRemaining.value <= 1) completeTomato()
-    else tomatoRemaining.value -= 1
+    tickTomato()
   }, 1000)
 }
 
