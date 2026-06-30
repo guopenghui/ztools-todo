@@ -100,16 +100,24 @@ export function useTodoTasks(options: TodoTasksOptions) {
     deleteTaskId.value = task._id
   }
 
+  function nextTaskIdAfterDelete(taskId: string) {
+    const taskList = options.visibleTasks.value
+    const taskIndex = taskList.findIndex((item) => item._id === taskId)
+    if (taskIndex < 0) return ''
+    return taskList[taskIndex + 1]?._id || taskList[taskIndex - 1]?._id || ''
+  }
+
   function confirmDeleteTask() {
     const task = deletingTask.value
     if (!task) {
       deleteTaskId.value = ''
       return
     }
+    const nextTaskId = nextTaskIdAfterDelete(task._id)
     removeDoc(task._id)
     deleteTaskId.value = ''
     options.refreshData()
-    if (options.activeTaskId.value === task._id) options.activeTaskId.value = options.visibleTasks.value[0]?._id || ''
+    if (options.activeTaskId.value === task._id) options.selectTask(nextTaskId)
   }
 
   function moveTask(task: TaskDoc, position: 'top' | 'bottom') {
